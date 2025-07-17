@@ -1310,7 +1310,7 @@ test_evbuffer_add_file(void *ptr)
 	    addfile_test_readcb, dest);
 	tt_assert(wev);
 	tt_assert(rev);
-	
+
 	event_add(wev, NULL);
 	event_add(rev, NULL);
 	event_base_dispatch(base);
@@ -2910,6 +2910,44 @@ end:
 		evbuffer_free(buf);
 }
 
+static void
+test_evbuffer_drain_fully(void *ptr)
+{
+	struct evbuffer *buf = evbuffer_new();
+	char data[1024];
+	size_t i;
+
+	for (i = 0; i < sizeof(data); ++i)
+		data[i] = i;
+
+	tt_assert(buf);
+
+	/* Add data in multiple chunks */
+	evbuffer_add(buf, data, 512);
+	evbuffer_add(buf, data + 512, 512);
+
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 1024);
+
+	/* Drain the whole buffer. This should not crash. */
+	evbuffer_drain(buf, 1024);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 0);
+
+	/* The buffer should be usable after being fully drained. */
+	evbuffer_add(buf, data, 256);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 256);
+
+	evbuffer_drain(buf, 256);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 0);
+
+end:
+	if (buf)
+		evbuffer_free(buf);
+}
+
 static void *
 setup_passthrough(const struct testcase_t *testcase)
 {
@@ -2969,6 +3007,7 @@ struct testcase_t evbuffer_testcases[] = {
 	{ "freeze_end", test_evbuffer_freeze, TT_NEED_SOCKETPAIR, &basic_setup, (void*)"end" },
 	{ "add_iovec", test_evbuffer_add_iovec, 0, NULL, NULL},
 	{ "copyout", test_evbuffer_copyout, 0, NULL, NULL},
+	{ "drain_fully", test_evbuffer_drain_fully, 0, NULL, NULL },
 	{ "file_segment_add_cleanup_cb", test_evbuffer_file_segment_add_cleanup_cb, 0, NULL, NULL },
 	{ "pullup_with_empty", test_evbuffer_pullup_with_empty, 0, NULL, NULL },
 #ifndef EVENT__DISABLE_MM_REPLACEMENT
