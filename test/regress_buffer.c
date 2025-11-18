@@ -2952,10 +2952,9 @@ static void
 test_evbuffer_drain_null_chain(void *ptr)
 {
 	struct evbuffer *buf = evbuffer_new();
-	struct evbuffer_iovec v[4];
-	char data[512];
+	char data[1024];
+	unsigned char *ptr1;
 	size_t i;
-	int n;
 
 	(void)ptr;
 
@@ -2964,44 +2963,43 @@ test_evbuffer_drain_null_chain(void *ptr)
 
 	tt_assert(buf);
 
-	/* Create a buffer with data that will be drained completely.
-	 * The test is designed to trigger the else branch in evbuffer_drain
-	 * by using evbuffer_peek to pin a chain, which forces the code
-	 * into the else path even when draining all data. */
+	/* This test reproduces the scenario from ws.c that can trigger
+	 * the evbuffer_drain NULL pointer bug.
+	 * 
+	 * The bug occurs when:
+	 * 1. Buffer has data in multiple chunks
+	 * 2. We call evbuffer_pullup which may consolidate chains
+	 * 3. We drain an amount that causes all chains to be freed
+	 * 4. Without NULL checks, the code crashes accessing chain->off
+	 */
 	
-	/* Add some data */
-	evbuffer_add(buf, data, 128);
-	evbuffer_add(buf, data + 128, 128);
-	evbuffer_add(buf, data + 256, 128);
-	evbuffer_add(buf, data + 384, 128);
+	/* Add data in multiple chunks to create separate chains */
+	evbuffer_add(buf, data, 200);
+	evbuffer_add(buf, data + 200, 200);
+	evbuffer_add(buf, data + 400, 200);
 
 	evbuffer_validate(buf);
-	tt_int_op(evbuffer_get_length(buf), ==, 512);
+	tt_int_op(evbuffer_get_length(buf), ==, 600);
 
-	/* Peek at the buffer to pin the last chain.
-	 * This forces HAS_PINNED_R to return true. */
-	n = evbuffer_peek(buf, -1, NULL, v, 4);
-	tt_assert(n > 0);
+	/* Call pullup - similar to ws.c pattern */
+	ptr1 = evbuffer_pullup(buf, 600);
+	tt_assert(ptr1 != NULL);
 
-	/* Drain exactly all the data from all chains.
-	 * Because we have pinned chains (via peek), this will go through
-	 * the else branch in evbuffer_drain even though we're draining
-	 * all the data.
+	/* Now drain all the data. After pullup, the buffer structure may
+	 * be such that draining causes chain to become NULL.
 	 * 
-	 * Without the NULL check fix:
-	 * - The loop condition "remaining >= chain->off" would try to
-	 *   dereference chain->off when chain is NULL, causing a segfault.
-	 * - After the loop, accessing chain->off or chain->misalign would
-	 *   also segfault when chain is NULL.
+	 * Without the NULL check fixes in evbuffer_drain:
+	 * - Loop: "remaining >= chain->off" would segfault with NULL chain
+	 * - After loop: accessing chain->off would segfault
 	 */
-	evbuffer_drain(buf, 512);
+	evbuffer_drain(buf, 600);
 	evbuffer_validate(buf);
 	tt_int_op(evbuffer_get_length(buf), ==, 0);
 
-	/* Verify the buffer is still usable after draining to NULL chain. */
-	evbuffer_add(buf, data, 128);
+	/* Verify buffer is still usable */
+	evbuffer_add(buf, data, 100);
 	evbuffer_validate(buf);
-	tt_int_op(evbuffer_get_length(buf), ==, 128);
+	tt_int_op(evbuffer_get_length(buf), ==, 100);
 
 end:
 	if (buf)
