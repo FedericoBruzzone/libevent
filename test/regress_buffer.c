@@ -2948,6 +2948,66 @@ end:
 		evbuffer_free(buf);
 }
 
+static void
+test_evbuffer_drain_null_chain(void *ptr)
+{
+	struct evbuffer *buf = evbuffer_new();
+	struct evbuffer_iovec v[4];
+	char data[512];
+	size_t i;
+	int n;
+
+	(void)ptr;
+
+	for (i = 0; i < sizeof(data); ++i)
+		data[i] = (char)i;
+
+	tt_assert(buf);
+
+	/* Create a buffer with data that will be drained completely.
+	 * The test is designed to trigger the else branch in evbuffer_drain
+	 * by using evbuffer_peek to pin a chain, which forces the code
+	 * into the else path even when draining all data. */
+	
+	/* Add some data */
+	evbuffer_add(buf, data, 128);
+	evbuffer_add(buf, data + 128, 128);
+	evbuffer_add(buf, data + 256, 128);
+	evbuffer_add(buf, data + 384, 128);
+
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 512);
+
+	/* Peek at the buffer to pin the last chain.
+	 * This forces HAS_PINNED_R to return true. */
+	n = evbuffer_peek(buf, -1, NULL, v, 4);
+	tt_assert(n > 0);
+
+	/* Drain exactly all the data from all chains.
+	 * Because we have pinned chains (via peek), this will go through
+	 * the else branch in evbuffer_drain even though we're draining
+	 * all the data.
+	 * 
+	 * Without the NULL check fix:
+	 * - The loop condition "remaining >= chain->off" would try to
+	 *   dereference chain->off when chain is NULL, causing a segfault.
+	 * - After the loop, accessing chain->off or chain->misalign would
+	 *   also segfault when chain is NULL.
+	 */
+	evbuffer_drain(buf, 512);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 0);
+
+	/* Verify the buffer is still usable after draining to NULL chain. */
+	evbuffer_add(buf, data, 128);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 128);
+
+end:
+	if (buf)
+		evbuffer_free(buf);
+}
+
 static void *
 setup_passthrough(const struct testcase_t *testcase)
 {
@@ -3008,6 +3068,7 @@ struct testcase_t evbuffer_testcases[] = {
 	{ "add_iovec", test_evbuffer_add_iovec, 0, NULL, NULL},
 	{ "copyout", test_evbuffer_copyout, 0, NULL, NULL},
 	{ "drain_fully", test_evbuffer_drain_fully, 0, NULL, NULL },
+	{ "drain_null_chain", test_evbuffer_drain_null_chain, 0, NULL, NULL },
 	{ "file_segment_add_cleanup_cb", test_evbuffer_file_segment_add_cleanup_cb, 0, NULL, NULL },
 	{ "pullup_with_empty", test_evbuffer_pullup_with_empty, 0, NULL, NULL },
 #ifndef EVENT__DISABLE_MM_REPLACEMENT
