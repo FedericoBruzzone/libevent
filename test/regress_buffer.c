@@ -2952,44 +2952,47 @@ static void
 test_evbuffer_drain_null_chain(void *ptr)
 {
 	struct evbuffer *buf = evbuffer_new();
-	struct evbuffer_chain *chain;
-	char data[256];
+	unsigned char data[512];
+	unsigned char *pulled;
 	size_t i;
 
 	(void)ptr;
 
 	for (i = 0; i < sizeof(data); ++i)
-		data[i] = (char)i;
+		data[i] = (unsigned char)i;
 
 	tt_assert(buf);
 
-	/* This test reproduces the evbuffer_drain NULL pointer bug.
-	 * 
-	 * The bug: In OLD code without NULL checks:
-	 *   for (chain = buf->first; remaining >= chain->off; chain = next)
-	 * 
-	 * After much investigation, the scenario is:
-	 * - Buffer: data → empty_pinned
-	 * - Drain all data
-	 * - Since last chain is pinned, HAS_PINNED_R() = TRUE → else branch
-	 * - Loop processes data, remaining = 0
-	 * - Loop sees empty pinned: 0 >= 0 TRUE, but BREAKS on pinned
-	 * - After loop: chain = empty (not NULL), so no crash!
-	 * 
-	 * I've been unable to create a scenario where chain becomes NULL
-	 * after the loop without triggering the safe first branch.
-	 * 
-	 * Let me try a simple test: just drain all data from a normal buffer
-	 * and rely on pullup or some other operation creating the right state.
+	/* Reproduce a pattern similar to ws.c that might trigger the bug:
+	 * 1. Add data in multiple chunks
+	 * 2. Call pullup to consolidate
+	 * 3. Drain part of the data
+	 * This might create a buffer state where drain hits the bug.
 	 */
 	
-	/* Simple scenario: Add data, drain it all */
-	evbuffer_add(buf, data, 256);
+	/* Add data in chunks */
+	evbuffer_add(buf, data, 100);
+	evbuffer_add(buf, data + 100, 100);
+	evbuffer_add(buf, data + 200, 100);
+	
 	evbuffer_validate(buf);
-	tt_int_op(evbuffer_get_length(buf), ==, 256);
-
-	/* Drain all */
-	evbuffer_drain(buf, 256);
+	tt_int_op(evbuffer_get_length(buf), ==, 300);
+	
+	/* Pullup to consolidate - this might create special chain structure */
+	pulled = evbuffer_pullup(buf, 300);
+	tt_assert(pulled != NULL);
+	
+	/* Now drain some data */
+	evbuffer_drain(buf, 150);
+	evbuffer_validate(buf);
+	tt_int_op(evbuffer_get_length(buf), ==, 150);
+	
+	/* Pullup again */
+	pulled = evbuffer_pullup(buf, -1);
+	tt_assert(pulled != NULL);
+	
+	/* Drain the rest */
+	evbuffer_drain(buf, 150);
 	evbuffer_validate(buf);
 	tt_int_op(evbuffer_get_length(buf), ==, 0);
 
